@@ -20,8 +20,12 @@ const App: React.FC = () => {
   const [quizOptions, setQuizOptions] = useState<Word[]>([]);
   const [answeredCorrectly, setAnsweredCorrectly] = useState<boolean | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
+  const [wrongAnswers, setWrongAnswers] = useState<Word[]>([]);
 
-  // Sound Feedback (Correct/Incorrect) using Web Audio API
+  // Helper to get all words from all units
+  const allWords = useMemo(() => UNITS.flatMap(u => u.words), []);
+
+  // Sound Feedback (Correct/Incorrect)
   const playFeedbackSound = useCallback((isCorrect: boolean) => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -32,19 +36,17 @@ const App: React.FC = () => {
       gainNode.connect(audioCtx.destination);
 
       if (isCorrect) {
-        // High pitched pleasant "ding"
         oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
-        oscillator.frequency.exponentialRampToValueAtTime(1320, audioCtx.currentTime + 0.1); // E6
+        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(1320, audioCtx.currentTime + 0.1);
         gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
         oscillator.start();
         oscillator.stop(audioCtx.currentTime + 0.5);
       } else {
-        // Lower pitched "thud"
         oscillator.type = 'triangle';
-        oscillator.frequency.setValueAtTime(220, audioCtx.currentTime); // A3
-        oscillator.frequency.linearRampToValueAtTime(110, audioCtx.currentTime + 0.2); // A2
+        oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+        oscillator.frequency.linearRampToValueAtTime(110, audioCtx.currentTime + 0.2);
         gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
         gainNode.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
         oscillator.start();
@@ -57,8 +59,6 @@ const App: React.FC = () => {
 
   // Cantonese TTS
   const speak = useCallback((text: string, onEnd?: () => void) => {
-    // Only speak in Learn mode
-    if (appMode !== 'learn') return;
     if (!window.speechSynthesis) return;
     
     window.speechSynthesis.cancel();
@@ -77,38 +77,46 @@ const App: React.FC = () => {
       if (onEnd) onEnd();
     };
     window.speechSynthesis.speak(utterance);
-  }, [appMode]);
+  }, []);
 
-  // Generate randomized options for quiz
-  const generateOptions = useCallback((correctWord: Word, unit: Unit) => {
-    const distractors = unit.words
+  // Generate randomized options for quiz from ALL words
+  const generateGlobalOptions = useCallback((correctWord: Word) => {
+    const distractors = allWords
       .filter(w => w.id !== correctWord.id)
       .sort(() => Math.random() - 0.5)
       .slice(0, 3);
     
     const options = [correctWord, ...distractors].sort(() => Math.random() - 0.5);
     setQuizOptions(options);
-  }, []);
+  }, [allWords]);
 
-  // Task Initialization
-  const startTask = (unit: Unit) => {
+  // Task Initialization for Learn Mode
+  const startLearnTask = (unit: Unit) => {
+    setAppMode('learn');
     setSelectedUnit(unit);
     setCurrentIndex(0);
-    if (appMode === 'learn') {
-      setView('learn');
-      setShowCelebration(false);
-      // Auto speak first word in learn mode
-      setTimeout(() => speak(unit.words[0].text), 300);
-    } else {
-      const shuffled = [...unit.words].sort(() => Math.random() - 0.5);
-      setShuffledWords(shuffled);
-      setQuizScore(0);
-      setView('exercise');
-      setAnsweredCorrectly(null);
-      setSelectedOptionId(null);
-      generateOptions(shuffled[0], unit);
-    }
+    setView('learn');
+    setShowCelebration(false);
+    setTimeout(() => speak(unit.words[0].text), 300);
   };
+
+  // Start Global Challenge (10 random words from all units)
+  const startGlobalChallenge = useCallback(() => {
+    setAppMode('exercise');
+    setSelectedUnit(null);
+    setCurrentIndex(0);
+    setQuizScore(0);
+    setWrongAnswers([]);
+    
+    // Pick 10 random unique words
+    const shuffled = [...allWords].sort(() => Math.random() - 0.5).slice(0, 10);
+    setShuffledWords(shuffled);
+    
+    setView('exercise');
+    setAnsweredCorrectly(null);
+    setSelectedOptionId(null);
+    generateGlobalOptions(shuffled[0]);
+  }, [allWords, generateGlobalOptions]);
 
   const goHome = () => {
     setView('main_menu');
@@ -137,34 +145,33 @@ const App: React.FC = () => {
   };
 
   const handleAnswer = (option: Word) => {
-    if (answeredCorrectly !== null || !selectedUnit) return;
+    if (answeredCorrectly !== null) return;
     
-    const isCorrect = option.id === shuffledWords[currentIndex].id;
+    const correctWord = shuffledWords[currentIndex];
+    const isCorrect = option.id === correctWord.id;
+    
     setSelectedOptionId(option.id);
     setAnsweredCorrectly(isCorrect);
-    
-    // Play sound feedback
     playFeedbackSound(isCorrect);
     
     if (isCorrect) {
       setQuizScore(prev => prev + 1);
-      setTimeout(proceedQuiz, 800);
     } else {
-      setTimeout(() => {
-        setAnsweredCorrectly(null);
-        setSelectedOptionId(null);
-      }, 1000);
+      // Add to wrong answers list for later review
+      setWrongAnswers(prev => [...prev, correctWord]);
     }
+    
+    // Both correct and incorrect answers proceed to next question after a brief delay
+    setTimeout(proceedQuiz, 800);
   };
 
   const proceedQuiz = () => {
-    if (!selectedUnit) return;
     if (currentIndex < shuffledWords.length - 1) {
       const nextIdx = currentIndex + 1;
       setCurrentIndex(nextIdx);
       setAnsweredCorrectly(null);
       setSelectedOptionId(null);
-      generateOptions(shuffledWords[nextIdx], selectedUnit);
+      generateGlobalOptions(shuffledWords[nextIdx]);
     } else {
       setView('result');
     }
@@ -174,13 +181,12 @@ const App: React.FC = () => {
     if (selectedUnit) {
       const currentUnitIdx = UNITS.findIndex(u => u.id === selectedUnit.id);
       const nextUnit = UNITS[(currentUnitIdx + 1) % UNITS.length];
-      startTask(nextUnit);
+      startLearnTask(nextUnit);
     }
   };
 
   // --- Views ---
 
-  // 1. Main Menu Mode Selection
   if (view === 'main_menu') {
     return (
       <div className="h-screen w-screen bg-green-50 flex flex-col items-center justify-center p-4 text-center font-['Noto_Sans_TC'] overflow-hidden">
@@ -194,31 +200,28 @@ const App: React.FC = () => {
           >
             <span className="text-5xl md:text-6xl mb-2">📖</span>
             <span className="text-xl md:text-2xl font-black">我要學習</span>
-            <span className="mt-1 text-sm opacity-80">聽發音，認字詞</span>
+            <span className="mt-1 text-sm opacity-80">按單元認讀字詞</span>
           </button>
           
           <button 
-            onClick={() => { setAppMode('exercise'); setView('unit_selection'); }}
+            onClick={startGlobalChallenge}
             className="flex-1 bg-orange-500 hover:bg-orange-600 text-white p-6 rounded-[2rem] shadow-xl transition-all active:scale-95 flex flex-col items-center border-b-4 border-orange-700"
           >
             <span className="text-5xl md:text-6xl mb-2">🎯</span>
             <span className="text-xl md:text-2xl font-black">挑戰練習</span>
-            <span className="mt-1 text-sm opacity-80">配對圖畫，考考你</span>
+            <span className="mt-1 text-sm opacity-80">10題隨機綜合考驗</span>
           </button>
         </div>
       </div>
     );
   }
 
-  // 2. Unit Selection View (Extra compact for zero-scroll)
   if (view === 'unit_selection') {
     return (
       <div className="h-screen w-screen bg-white flex flex-col overflow-hidden font-['Noto_Sans_TC']">
         <header className="pt-2 pb-1 text-center flex-shrink-0 relative">
           <button onClick={goHome} className="absolute left-4 top-2 text-2xl hover:scale-110 transition-transform bg-indigo-500 p-2 rounded-full text-white shadow-md">🏠</button>
-          <h1 className="text-xl md:text-2xl font-extrabold text-gray-700">
-            {appMode === 'learn' ? '📖 學習單元' : '🎯 挑戰單元'}
-          </h1>
+          <h1 className="text-xl md:text-2xl font-extrabold text-gray-700">📖 學習單元</h1>
           <p className="text-[10px] md:text-xs text-gray-400 font-bold uppercase tracking-widest">請選擇主題</p>
         </header>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -226,7 +229,7 @@ const App: React.FC = () => {
             {UNITS.map((unit) => (
               <button
                 key={unit.id}
-                onClick={() => startTask(unit)}
+                onClick={() => startLearnTask(unit)}
                 className={`${unit.color} hover:shadow-lg hover:scale-[1.02] transition-all p-2 rounded-2xl shadow-sm flex flex-col items-center justify-center text-white border-4 border-white aspect-square`}
               >
                 <span className="text-3xl md:text-4xl mb-1">{unit.icon}</span>
@@ -241,7 +244,6 @@ const App: React.FC = () => {
     );
   }
 
-  // 3. Learn View
   if (view === 'learn' && selectedUnit) {
     const currentWord = selectedUnit.words[currentIndex];
     return (
@@ -263,9 +265,12 @@ const App: React.FC = () => {
           {showCelebration ? (
             <div className="w-full h-full bg-blue-50 rounded-[2.5rem] flex flex-col items-center justify-center p-6 text-center animate-in zoom-in">
               <span className="text-8xl mb-4">🎉</span>
-              <h3 className="text-3xl font-black text-blue-600 mb-2">學習完成！</h3>
-              <p className="text-lg font-bold text-gray-600 mb-6">而家去挑戰下練習囉？</p>
-              <button onClick={() => { setAppMode('exercise'); startTask(selectedUnit); }} className="bg-orange-500 text-white px-10 py-4 rounded-2xl text-xl font-black shadow-lg">開始挑戰 🎯</button>
+              <h3 className="text-3xl font-black text-blue-600 mb-2">真係叻！</h3>
+              <p className="text-lg font-bold text-gray-600 mb-6">呢個單元學完喇，不如去下一個？</p>
+              <div className="flex flex-col gap-3 w-full max-w-xs">
+                <button onClick={goToNextUnit} className="bg-blue-500 text-white px-10 py-4 rounded-2xl text-xl font-black shadow-lg border-b-4 border-blue-700 active:translate-y-1 active:border-b-0">下一個單元 ➡️</button>
+                <button onClick={() => setView('unit_selection')} className="bg-indigo-500 text-white px-10 py-3 rounded-2xl text-lg font-black shadow-lg active:scale-95 transition-all">返去選單 ⬅️</button>
+              </div>
             </div>
           ) : (
             <div 
@@ -285,7 +290,7 @@ const App: React.FC = () => {
 
         {!showCelebration && (
           <div className="w-full max-w-2xl mx-auto grid grid-cols-2 gap-3 h-16 flex-shrink-0 pt-1 pb-1">
-            <button onClick={prevCard} disabled={currentIndex === 0} className="rounded-xl bg-indigo-400 text-white font-black text-lg disabled:opacity-30 active:scale-95 transition-transform shadow-md">上一個</button>
+            <button onClick={prevCard} disabled={currentIndex === 0} className="rounded-xl bg-indigo-500 text-white font-black text-lg disabled:opacity-30 active:scale-95 transition-transform shadow-md">上一個</button>
             <button onClick={nextCard} className="rounded-xl bg-blue-500 text-white font-black text-lg active:scale-95 transition-transform shadow-md">{currentIndex === selectedUnit.words.length - 1 ? '完成 ✨' : '下一個'}</button>
           </div>
         )}
@@ -293,14 +298,19 @@ const App: React.FC = () => {
     );
   }
 
-  // 4. Exercise View (Random sequence, sound feedback, no speech)
-  if (view === 'exercise' && selectedUnit) {
+  if (view === 'exercise') {
     const currentWord = shuffledWords[currentIndex];
     return (
       <div className="h-screen w-screen bg-orange-50 flex flex-col overflow-hidden p-2 md:p-4 font-['Noto_Sans_TC']">
         <div className="w-full max-w-2xl mx-auto flex justify-between items-center h-10 md:h-12 flex-shrink-0">
-          <button onClick={() => setView('unit_selection')} className="px-3 py-1 bg-indigo-500 text-white rounded-full font-black text-xs shadow-md active:scale-95">放棄</button>
-          <div className="bg-white px-3 py-1 rounded-full font-black text-orange-600 shadow-sm text-sm border-2 border-orange-100">得分：{quizScore}</div>
+          <button onClick={goHome} className="px-3 py-1 bg-indigo-500 text-white rounded-full font-black text-xs shadow-md active:scale-95">放棄</button>
+          <div className="flex flex-col items-center">
+            <span className="text-[10px] font-black text-orange-400 uppercase tracking-widest">綜合挑戰遊戲</span>
+            <div className="bg-white px-3 py-0.5 rounded-full font-black text-orange-600 shadow-sm text-xs border-2 border-orange-100">
+              {currentIndex + 1} / 10
+            </div>
+          </div>
+          <div className="bg-white px-2 py-0.5 rounded-lg font-black text-orange-600 text-[10px]">得分：{quizScore}</div>
         </div>
 
         <div className="flex-1 flex flex-col items-center justify-center max-w-2xl mx-auto w-full py-2">
@@ -319,7 +329,7 @@ const App: React.FC = () => {
                   relative rounded-[1.5rem] text-6xl md:text-7xl flex items-center justify-center transition-all duration-300 shadow-md border-2
                   ${selectedOptionId === option.id 
                     ? (answeredCorrectly ? 'bg-green-400 border-green-500 scale-105 z-10' : 'bg-red-400 border-red-500 scale-95 opacity-50')
-                    : 'bg-white border-transparent hover:border-orange-200 active:scale-95'}
+                    : (answeredCorrectly === false && option.id === shuffledWords[currentIndex].id ? 'bg-green-100 border-green-300' : 'bg-white border-transparent hover:border-orange-200 active:scale-95')}
                 `}
               >
                 <span className="drop-shadow-sm">{option.emoji}</span>
@@ -343,14 +353,13 @@ const App: React.FC = () => {
     );
   }
 
-  // 5. Result View
-  if (view === 'result' && selectedUnit) {
-    const ratio = quizScore / selectedUnit.words.length;
+  if (view === 'result') {
+    const ratio = quizScore / 10;
     let stars = ratio === 1 ? 3 : ratio >= 0.7 ? 2 : ratio > 0 ? 1 : 0;
 
     return (
       <div className="h-screen w-screen bg-green-50 flex flex-col items-center justify-center p-6 text-center font-['Noto_Sans_TC'] overflow-hidden">
-        <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl flex flex-col items-center max-w-md w-full border-4 border-green-100">
+        <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl flex flex-col items-center max-w-md w-full border-4 border-green-100 overflow-y-auto max-h-[90vh]">
           <h2 className="text-2xl font-black text-gray-800 mb-2">挑戰完成！🎉</h2>
           
           <div className="flex gap-1 mb-4">
@@ -361,23 +370,36 @@ const App: React.FC = () => {
             ))}
           </div>
           
-          <p className="text-2xl font-black text-gray-700 mb-1">得分：{quizScore} / {selectedUnit.words.length}</p>
-          <p className="text-base font-bold text-gray-500 mb-6">
-            {quizScore === selectedUnit.words.length ? '滿分呀！你真係天才！🦁' : '做得好！下次再努力呀！💪'}
+          <p className="text-2xl font-black text-gray-700 mb-1">得分：{quizScore} / 10</p>
+          <p className="text-base font-bold text-gray-500 mb-4">
+            {quizScore === 10 ? '滿分呀！你真係天才！🦁' : '做得好！下次再努力呀！💪'}
           </p>
+
+          {wrongAnswers.length > 0 && (
+            <div className="w-full bg-blue-50 rounded-2xl p-4 mb-6 text-left">
+              <h3 className="text-sm font-black text-blue-600 mb-3 border-b border-blue-100 pb-1">💡 小溫習（記住呢啲字詞呀）：</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {wrongAnswers.map((word, i) => (
+                  <button 
+                    key={i} 
+                    onClick={() => speak(word.text)}
+                    className="flex items-center gap-2 bg-white p-2 rounded-xl shadow-sm hover:scale-105 transition-transform border border-blue-100"
+                  >
+                    <span className="text-2xl">{word.emoji}</span>
+                    <span className="text-lg font-black text-gray-700">{word.text}</span>
+                    <span className="text-xs text-blue-300 ml-auto">🔊</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           
           <div className="flex flex-col gap-2 w-full">
             <button 
-              onClick={() => startTask(selectedUnit)}
+              onClick={startGlobalChallenge}
               className="bg-orange-500 text-white p-4 rounded-2xl text-lg font-black shadow-lg border-b-4 border-orange-700 active:border-b-0 active:translate-y-1 transition-all"
             >
               再挑戰一次 🔄
-            </button>
-            <button 
-              onClick={goToNextUnit}
-              className="bg-blue-500 text-white p-4 rounded-2xl text-lg font-black shadow-lg border-b-4 border-blue-700 active:border-b-0 active:translate-y-1 transition-all"
-            >
-              下一個單元 ➡️
             </button>
             <button 
               onClick={goHome}
