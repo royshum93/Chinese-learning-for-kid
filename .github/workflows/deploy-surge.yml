@@ -1,0 +1,42 @@
+name: Deploy to Surge
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH_DIR: public
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        # change this to your build command (or remove this step if there is no build)
+        run: npm run build
+
+      - name: Deploy to Surge
+        env:
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          SURGE_DOMAIN: ${{ secrets.SURGE_DOMAIN }}  # optional — set as secret or replace with a literal domain
+        run: |
+          if [ ! -d "${PUBLISH_DIR}" ]; then
+            echo "Publish directory '${PUBLISH_DIR}' not found"
+            ls -la
+            exit 1
+          fi
+          npx --yes surge "${PUBLISH_DIR}" --domain "${SURGE_DOMAIN}" --token "${SURGE_TOKEN}"
