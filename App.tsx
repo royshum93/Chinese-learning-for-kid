@@ -30,14 +30,10 @@ const App: React.FC = () => {
 
   // --- Prevent Back Navigation (History Trap) ---
   useEffect(() => {
-    // Push an initial state to the history
     window.history.pushState(null, "", window.location.href);
-
-    const handlePopState = (event: PopStateEvent) => {
-      // Whenever user tries to go back, push the state forward again
+    const handlePopState = () => {
       window.history.pushState(null, "", window.location.href);
     };
-
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
@@ -103,7 +99,7 @@ const App: React.FC = () => {
   useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
-      if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+      if (karaokeTimerRef.current) clearTimeout(karaokeTimerRef.current);
     };
   }, []);
 
@@ -128,7 +124,7 @@ const App: React.FC = () => {
 
   const startGlobalChallenge = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+    if (karaokeTimerRef.current) clearTimeout(karaokeTimerRef.current);
     window.speechSynthesis.cancel();
     
     setAppMode('exercise');
@@ -149,7 +145,7 @@ const App: React.FC = () => {
 
   const goHome = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+    if (karaokeTimerRef.current) clearTimeout(karaokeTimerRef.current);
     window.speechSynthesis.cancel();
     
     setView('main_menu');
@@ -189,25 +185,40 @@ const App: React.FC = () => {
     playFeedbackSound(isCorrect);
     
     const chars = correctWord.text.split('');
-    const charInterval = 1200;
+    const charInterval = 1200; // 字與字之間的間隔
+    const repetitionPause = 800; // 第一遍和第二遍之間的「額外」停頓 (1200 + 800 = 2000ms)
+    const repeatTimes = 2;
+    const totalSteps = chars.length * repeatTimes;
     
-    setTimeout(() => {
-      setHighlightedCharIndex(0);
-      speak(chars[0]);
-    }, 400);
+    let currentStep = 0;
     
-    if (chars.length > 1) {
-      let step = 1;
-      karaokeTimerRef.current = window.setInterval(() => {
-        if (step < chars.length) {
-          setHighlightedCharIndex(step);
-          speak(chars[step]);
-          step++;
-        } else {
-          if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+    const runKaraokeStep = () => {
+      if (currentStep < totalSteps) {
+        const charIdx = currentStep % chars.length;
+        setHighlightedCharIndex(charIdx);
+        speak(chars[charIdx]);
+        
+        currentStep++;
+        
+        // 判斷下一步的延遲
+        let nextDelay = charInterval;
+        
+        // 如果剛讀完第一遍的所有字，且還沒開始第二遍
+        if (currentStep === chars.length) {
+          nextDelay += repetitionPause;
         }
-      }, charInterval);
-    }
+        
+        if (currentStep < totalSteps) {
+          karaokeTimerRef.current = window.setTimeout(runKaraokeStep, nextDelay);
+        } else {
+          // 全部讀完後清除高亮
+          karaokeTimerRef.current = window.setTimeout(() => setHighlightedCharIndex(-1), charInterval);
+        }
+      }
+    };
+
+    // 延遲一點開始朗讀回饋
+    setTimeout(runKaraokeStep, 400);
     
     if (isCorrect) {
       setQuizScore(prev => prev + 1);
@@ -215,7 +226,9 @@ const App: React.FC = () => {
       setWrongAnswers(prev => [...prev, correctWord]);
     }
     
-    timerRef.current = window.setTimeout(proceedQuiz, 5500);
+    // 動態計算跳題時間：起始延遲 + (總字數-1 * 間隔) + (重複次數-1 * 額外停頓) + 緩衝時間
+    const totalSpeakDuration = 400 + (totalSteps * charInterval) + repetitionPause + 1000;
+    timerRef.current = window.setTimeout(proceedQuiz, totalSpeakDuration);
   };
 
   const proceedQuiz = () => {
@@ -225,7 +238,7 @@ const App: React.FC = () => {
       setAnsweredCorrectly(null);
       setSelectedOptionId(null);
       setHighlightedCharIndex(-1);
-      if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+      if (karaokeTimerRef.current) clearTimeout(karaokeTimerRef.current);
       generateGlobalOptions(shuffledWords[nextIdx]);
     } else {
       setView('result');
@@ -389,7 +402,7 @@ const App: React.FC = () => {
             </h2>
             {answeredCorrectly !== null && (
               <div className="mt-2 text-xs font-bold text-orange-400 animate-pulse flex items-center gap-1">
-                <span>🔊</span> 正在逐字認讀...
+                <span>🔊</span> 認讀兩遍練習中...
               </div>
             )}
           </div>
