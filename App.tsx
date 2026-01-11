@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { UNITS } from './constants';
 import { Unit, Word } from './types';
 
@@ -21,6 +21,12 @@ const App: React.FC = () => {
   const [answeredCorrectly, setAnsweredCorrectly] = useState<boolean | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [wrongAnswers, setWrongAnswers] = useState<Word[]>([]);
+  
+  // New state for per-character highlighting
+  const [highlightedCharIndex, setHighlightedCharIndex] = useState<number>(-1);
+  
+  const timerRef = useRef<number | null>(null);
+  const karaokeTimerRef = useRef<number | null>(null);
 
   // Helper to get all words from all units
   const allWords = useMemo(() => UNITS.flatMap(u => u.words), []);
@@ -58,17 +64,19 @@ const App: React.FC = () => {
   }, []);
 
   // Cantonese TTS
-  const speak = useCallback((text: string, onEnd?: () => void) => {
+  const speak = useCallback((text: string, rate: number = 0.9, onEnd?: () => void) => {
     if (!window.speechSynthesis) return;
     
+    // Cancel previous speaking to allow immediate per-character feedback
     window.speechSynthesis.cancel();
+    
     const utterance = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
     const cantoneseVoice = voices.find(v => v.lang === 'zh-HK' || v.lang === 'zh-MO' || v.lang.includes('cantonese'));
     
     if (cantoneseVoice) utterance.voice = cantoneseVoice;
     utterance.lang = 'zh-HK';
-    utterance.rate = 0.85;
+    utterance.rate = rate; 
     utterance.pitch = 1.1;
 
     utterance.onstart = () => setIsSpeaking(true);
@@ -79,7 +87,13 @@ const App: React.FC = () => {
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // Generate randomized options for quiz from ALL words
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+    };
+  }, []);
+
   const generateGlobalOptions = useCallback((correctWord: Word) => {
     const distractors = allWords
       .filter(w => w.id !== correctWord.id)
@@ -90,7 +104,6 @@ const App: React.FC = () => {
     setQuizOptions(options);
   }, [allWords]);
 
-  // Task Initialization for Learn Mode
   const startLearnTask = (unit: Unit) => {
     setAppMode('learn');
     setSelectedUnit(unit);
@@ -100,15 +113,18 @@ const App: React.FC = () => {
     setTimeout(() => speak(unit.words[0].text), 300);
   };
 
-  // Start Global Challenge (10 random words from all units)
   const startGlobalChallenge = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+    window.speechSynthesis.cancel();
+    
     setAppMode('exercise');
     setSelectedUnit(null);
     setCurrentIndex(0);
     setQuizScore(0);
     setWrongAnswers([]);
+    setHighlightedCharIndex(-1);
     
-    // Pick 10 random unique words
     const shuffled = [...allWords].sort(() => Math.random() - 0.5).slice(0, 10);
     setShuffledWords(shuffled);
     
@@ -119,6 +135,10 @@ const App: React.FC = () => {
   }, [allWords, generateGlobalOptions]);
 
   const goHome = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+    window.speechSynthesis.cancel();
+    
     setView('main_menu');
     setSelectedUnit(null);
     setShowCelebration(false);
@@ -152,17 +172,41 @@ const App: React.FC = () => {
     
     setSelectedOptionId(option.id);
     setAnsweredCorrectly(isCorrect);
+    
+    // 1. Play immediate feedback sound (ding/buzz)
     playFeedbackSound(isCorrect);
+    
+    // 2. Start Per-Character Karaoke sequence
+    const chars = correctWord.text.split('');
+    const charInterval = 1200; // Time per character (1.2s)
+    
+    // First character immediately after short delay
+    setTimeout(() => {
+      setHighlightedCharIndex(0);
+      speak(chars[0]); // Speak single character
+    }, 400);
+    
+    if (chars.length > 1) {
+      let step = 1;
+      karaokeTimerRef.current = window.setInterval(() => {
+        if (step < chars.length) {
+          setHighlightedCharIndex(step);
+          speak(chars[step]); // Speak next character in sync with color change
+          step++;
+        } else {
+          if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
+        }
+      }, charInterval);
+    }
     
     if (isCorrect) {
       setQuizScore(prev => prev + 1);
     } else {
-      // Add to wrong answers list for later review
       setWrongAnswers(prev => [...prev, correctWord]);
     }
     
-    // Both correct and incorrect answers proceed to next question after a brief delay
-    setTimeout(proceedQuiz, 800);
+    // 3. Stay for 5 seconds total for the child to absorb the learning
+    timerRef.current = window.setTimeout(proceedQuiz, 5500);
   };
 
   const proceedQuiz = () => {
@@ -171,6 +215,8 @@ const App: React.FC = () => {
       setCurrentIndex(nextIdx);
       setAnsweredCorrectly(null);
       setSelectedOptionId(null);
+      setHighlightedCharIndex(-1);
+      if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
       generateGlobalOptions(shuffledWords[nextIdx]);
     } else {
       setView('result');
@@ -300,6 +346,8 @@ const App: React.FC = () => {
 
   if (view === 'exercise') {
     const currentWord = shuffledWords[currentIndex];
+    const wordChars = currentWord?.text.split('') || [];
+    
     return (
       <div className="h-screen w-screen bg-orange-50 flex flex-col overflow-hidden p-2 md:p-4 font-['Noto_Sans_TC']">
         <div className="w-full max-w-2xl mx-auto flex justify-between items-center h-10 md:h-12 flex-shrink-0">
@@ -316,37 +364,69 @@ const App: React.FC = () => {
         <div className="flex-1 flex flex-col items-center justify-center max-w-2xl mx-auto w-full py-2">
           <div className="bg-white w-full rounded-[2rem] shadow-lg p-5 mb-3 flex flex-col items-center border-b-4 border-orange-200">
             <p className="text-sm md:text-lg font-bold text-gray-400 mb-1">邊張圖先至係：</p>
-            <h2 className="text-6xl md:text-8xl font-black text-orange-600 tracking-widest py-1 drop-shadow-sm leading-tight">{currentWord?.text}</h2>
+            <h2 className="text-6xl md:text-8xl font-black tracking-widest py-1 drop-shadow-sm leading-tight flex items-center justify-center gap-1">
+              {wordChars.map((char, charIdx) => (
+                <span 
+                  key={charIdx}
+                  className={`transition-all duration-300 ${
+                    answeredCorrectly === null 
+                    ? 'text-orange-600' 
+                    : (charIdx === highlightedCharIndex ? 'text-blue-600 scale-125 transform transition-transform' : 'text-gray-300')
+                  }`}
+                >
+                  {char}
+                </span>
+              ))}
+            </h2>
+            {answeredCorrectly !== null && (
+              <div className="mt-2 text-xs font-bold text-orange-400 animate-pulse flex items-center gap-1">
+                <span>🔊</span> 正在逐字認讀...
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 w-full flex-1 min-h-0">
-            {quizOptions.map((option) => (
-              <button
-                key={option.id}
-                onClick={() => handleAnswer(option)}
-                disabled={answeredCorrectly !== null}
-                className={`
-                  relative rounded-[1.5rem] text-6xl md:text-7xl flex items-center justify-center transition-all duration-300 shadow-md border-2
-                  ${selectedOptionId === option.id 
-                    ? (answeredCorrectly ? 'bg-green-400 border-green-500 scale-105 z-10' : 'bg-red-400 border-red-500 scale-95 opacity-50')
-                    : (answeredCorrectly === false && option.id === shuffledWords[currentIndex].id ? 'bg-green-100 border-green-300' : 'bg-white border-transparent hover:border-orange-200 active:scale-95')}
-                `}
-              >
-                <span className="drop-shadow-sm">{option.emoji}</span>
-                {selectedOptionId === option.id && (
-                  <div className={`absolute top-2 right-2 text-2xl ${answeredCorrectly ? 'animate-bounce' : 'animate-shake'}`}>
-                    {answeredCorrectly ? '✅' : '❌'}
-                  </div>
-                )}
-              </button>
-            ))}
+            {quizOptions.map((option) => {
+              const isSelected = selectedOptionId === option.id;
+              const isCorrectOption = option.id === currentWord.id;
+              
+              let buttonStyle = "bg-white border-transparent hover:border-orange-200 active:scale-95";
+              if (answeredCorrectly !== null) {
+                if (isCorrectOption) {
+                  buttonStyle = "bg-green-400 border-green-500 scale-105 z-10 shadow-xl";
+                } else if (isSelected && !answeredCorrectly) {
+                  buttonStyle = "bg-red-400 border-red-500 scale-95 opacity-50";
+                } else {
+                  buttonStyle = "bg-white border-transparent opacity-30 grayscale scale-90";
+                }
+              }
+
+              return (
+                <button
+                  key={option.id}
+                  onClick={() => handleAnswer(option)}
+                  disabled={answeredCorrectly !== null}
+                  className={`relative rounded-[1.5rem] text-6xl md:text-7xl flex items-center justify-center transition-all duration-300 shadow-md border-2 ${buttonStyle}`}
+                >
+                  <span className="drop-shadow-sm">{option.emoji}</span>
+                  {isSelected && (
+                    <div className={`absolute top-2 right-2 text-2xl ${answeredCorrectly ? 'animate-bounce' : 'animate-shake'}`}>
+                      {answeredCorrectly ? '✅' : '❌'}
+                    </div>
+                  )}
+                  {!isSelected && isCorrectOption && answeredCorrectly === false && (
+                    <div className="absolute top-2 right-2 text-2xl animate-pulse">💡</div>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 
         <div className="h-2.5 w-full max-w-2xl mx-auto bg-gray-200 rounded-full mb-2 overflow-hidden shadow-inner">
           <div 
             className="h-full bg-orange-500 transition-all duration-500 rounded-full" 
-            style={{ width: `${(currentIndex / shuffledWords.length) * 100}%` }}
+            style={{ width: `${((currentIndex + (answeredCorrectly !== null ? 1 : 0)) / shuffledWords.length) * 100}%` }}
           />
         </div>
       </div>
