@@ -22,11 +22,25 @@ const App: React.FC = () => {
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [wrongAnswers, setWrongAnswers] = useState<Word[]>([]);
   
-  // New state for per-character highlighting
+  // State for per-character highlighting
   const [highlightedCharIndex, setHighlightedCharIndex] = useState<number>(-1);
   
   const timerRef = useRef<number | null>(null);
   const karaokeTimerRef = useRef<number | null>(null);
+
+  // --- Prevent Back Navigation (History Trap) ---
+  useEffect(() => {
+    // Push an initial state to the history
+    window.history.pushState(null, "", window.location.href);
+
+    const handlePopState = (event: PopStateEvent) => {
+      // Whenever user tries to go back, push the state forward again
+      window.history.pushState(null, "", window.location.href);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Helper to get all words from all units
   const allWords = useMemo(() => UNITS.flatMap(u => u.words), []);
@@ -67,7 +81,6 @@ const App: React.FC = () => {
   const speak = useCallback((text: string, rate: number = 0.9, onEnd?: () => void) => {
     if (!window.speechSynthesis) return;
     
-    // Cancel previous speaking to allow immediate per-character feedback
     window.speechSynthesis.cancel();
     
     const utterance = new SpeechSynthesisUtterance(text);
@@ -173,17 +186,14 @@ const App: React.FC = () => {
     setSelectedOptionId(option.id);
     setAnsweredCorrectly(isCorrect);
     
-    // 1. Play immediate feedback sound (ding/buzz)
     playFeedbackSound(isCorrect);
     
-    // 2. Start Per-Character Karaoke sequence
     const chars = correctWord.text.split('');
-    const charInterval = 1200; // Time per character (1.2s)
+    const charInterval = 1200;
     
-    // First character immediately after short delay
     setTimeout(() => {
       setHighlightedCharIndex(0);
-      speak(chars[0]); // Speak single character
+      speak(chars[0]);
     }, 400);
     
     if (chars.length > 1) {
@@ -191,7 +201,7 @@ const App: React.FC = () => {
       karaokeTimerRef.current = window.setInterval(() => {
         if (step < chars.length) {
           setHighlightedCharIndex(step);
-          speak(chars[step]); // Speak next character in sync with color change
+          speak(chars[step]);
           step++;
         } else {
           if (karaokeTimerRef.current) clearInterval(karaokeTimerRef.current);
@@ -205,7 +215,6 @@ const App: React.FC = () => {
       setWrongAnswers(prev => [...prev, correctWord]);
     }
     
-    // 3. Stay for 5 seconds total for the child to absorb the learning
     timerRef.current = window.setTimeout(proceedQuiz, 5500);
   };
 
@@ -235,7 +244,7 @@ const App: React.FC = () => {
 
   if (view === 'main_menu') {
     return (
-      <div className="h-screen w-screen bg-green-50 flex flex-col items-center justify-center p-4 text-center font-['Noto_Sans_TC'] overflow-hidden">
+      <div className="h-screen w-screen bg-green-50 flex flex-col items-center justify-center p-4 text-center font-['Noto_Sans_TC'] overflow-hidden select-none">
         <h1 className="text-3xl md:text-5xl font-black text-green-600 mb-2 drop-shadow-sm">廣東話認字樂園 🎡</h1>
         <p className="text-lg md:text-xl text-gray-600 font-bold mb-6">小朋友，今日想玩咩呀？</p>
         
@@ -264,7 +273,7 @@ const App: React.FC = () => {
 
   if (view === 'unit_selection') {
     return (
-      <div className="h-screen w-screen bg-white flex flex-col overflow-hidden font-['Noto_Sans_TC']">
+      <div className="h-screen w-screen bg-white flex flex-col overflow-hidden font-['Noto_Sans_TC'] select-none">
         <header className="pt-2 pb-1 text-center flex-shrink-0 relative">
           <button onClick={goHome} className="absolute left-4 top-2 text-2xl hover:scale-110 transition-transform bg-indigo-500 p-2 rounded-full text-white shadow-md">🏠</button>
           <h1 className="text-xl md:text-2xl font-extrabold text-gray-700">📖 學習單元</h1>
@@ -349,7 +358,7 @@ const App: React.FC = () => {
     const wordChars = currentWord?.text.split('') || [];
     
     return (
-      <div className="h-screen w-screen bg-orange-50 flex flex-col overflow-hidden p-2 md:p-4 font-['Noto_Sans_TC']">
+      <div className="h-screen w-screen bg-orange-50 flex flex-col overflow-hidden p-2 md:p-4 font-['Noto_Sans_TC'] select-none">
         <div className="w-full max-w-2xl mx-auto flex justify-between items-center h-10 md:h-12 flex-shrink-0">
           <button onClick={goHome} className="px-3 py-1 bg-indigo-500 text-white rounded-full font-black text-xs shadow-md active:scale-95">放棄</button>
           <div className="flex flex-col items-center">
@@ -438,7 +447,7 @@ const App: React.FC = () => {
     let stars = ratio === 1 ? 3 : ratio >= 0.7 ? 2 : ratio > 0 ? 1 : 0;
 
     return (
-      <div className="h-screen w-screen bg-green-50 flex flex-col items-center justify-center p-6 text-center font-['Noto_Sans_TC'] overflow-hidden">
+      <div className="h-screen w-screen bg-green-50 flex flex-col items-center justify-center p-6 text-center font-['Noto_Sans_TC'] overflow-hidden select-none">
         <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl flex flex-col items-center max-w-md w-full border-4 border-green-100 overflow-y-auto max-h-[90vh]">
           <h2 className="text-2xl font-black text-gray-800 mb-2">挑戰完成！🎉</h2>
           
